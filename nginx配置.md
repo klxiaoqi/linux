@@ -1,3 +1,5 @@
+[nginx.conf 配置及基本优化](#nginxconfigoptimize)
+
 
 ``` bash
 # nginx 重启
@@ -355,3 +357,296 @@ location ~* \.(jpg|gif|jpeg|png)$ {
     }
 }
 ```
+
+
+
+
+
+
+
+<h2 id="nginxconfigoptimize">nginx.conf 配置及基本优化</h2>
+一：常用功能优化：
+
+1：网络连接的优化：
+
+　　只能在events模块设置，用于防止在同一一个时刻只有一个请求的情况下，出现多个睡眠进程会被唤醒但只能有一个进程可获得请求的尴尬，如果不优化，在多进程的nginx会影响以部分性能。
+
+events {
+accept_mutex on; #优化同一时刻只有一个请求而避免多个睡眠进程被唤醒的设置，on为防止被同时唤醒，默认为off，因此nginx刚安装完以后要进行适当的优化。
+}
+2.设置是否允许同时接受多个网络连接：
+
+　　只能在events模块设置，Nginx服务器的每个工作进程可以同时接受多个新的网络连接，但是需要在配置文件中配置，此指令默认为关闭，即默认为一个工作进程只能一次接受一个新的网络连接，打开后几个同时接受多个，配置语法如下：
+
+events {
+accept_mutex on;
+multi_accept on; #打开同时接受多个新网络连接请求的功能。
+}
+3.隐藏ngxin版本号：
+
+　　当前使用的nginx可能会有未知的漏洞，如果被黑客使用将会造成无法估量的损失，但是我们可以将nginx的版本隐藏，如下：
+
+server_tokens off; #在http 模块当中配置
+4.：选择事件驱动模型：
+
+　　Nginx支持众多的事件驱动，比如select、poll、epoll，只能设置在events模块中设置：
+
+events {
+accept_mutex on;
+multi_accept on;
+use epoll; #使用epoll事件驱动，因为epoll的性能相比其他事件驱动要好很多
+}
+5：配置单个工作进程的最大连接数：
+
+　　通过worker_connections number；进行设置，numebr为整数，number的值不能大于操作系统能打开的最大的文件句柄数，使用ulimit -n可以查看当前操作系统支持的最大文件句柄数，默认为为1024.
+
+复制代码
+events {
+    worker_connections  102400; #设置单个工作进程最大连接数102400
+    accept_mutex on;
+    multi_accept on;
+    use epoll;
+}
+复制代码
+6：定义MIME-Type：
+
+　　在浏览器当中可以显示的内容有HTML/GIF/XML/Flash等内容，浏览器为取得这些资源需要使用MIME Type，即MIME是网络资源的媒体类型，Nginx作为Web服务器必须要能够识别全都请求的资源类型，在nginx.conf文件中引用了一个第三方文件，使用include导入：
+
+include mime.types;
+default_type application/octet-stream;
+7：自定义访问日志：
+
+　　访问日志是记录客户端即用户的具体请求内容信息，全局配置模块中的error_log是记录nginx服务器运行时的日志保存路径和记录日志的level，因此有着本质的区别，而且Nginx的错误日志一般只有一个，但是访问日志可以在不同server中定义多个，定义一个日志需要使用access_log指定日志的保存路径，使用log_format指定日志的格式，格式中定义要保存的具体日志内容：
+
+    log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
+                      '$status $body_bytes_sent "$http_referer" '
+                      '"$http_user_agent" "$http_x_forwarded_for"';
+
+    access_log  /var/log/nginx/access.log  main;
+8：将日志定义为json格式：
+
+　　在使用日志分析工具如ELK对访问日志做统计的时候，就需要将日志格式定义为json格式，以便于取相应字段的key做统计，完整的定义如下：
+
+复制代码
+   log_format logstash_json '{"@timestamp":"$time_iso8601",'
+        '"host":"$server_addr",'
+        '"clientip":"$remote_addr",'
+        '"size":$body_bytes_sent,'
+        '"responsetime":$request_time,'
+        '"upstreamtime":"$upstream_response_time",'
+        '"upstreamhost":"$upstream_addr",'
+        '"http_host":"$host",'
+        '"url":"$uri",'
+        '"domain":"$host",'
+        '"xff":"$http_x_forwarded_for",'
+        '"referer":"$http_referer",'
+        '"agent":"$http_user_agent",'
+        '"status":"$status"}';
+server {
+　　　　listen 8090;
+　　　　server_name samsung.chinacloudapp.cn;
+　　　　access_log /var/log/nginx/samsung1.access.log logstash_json;
+　　　　location / {
+　　　　　　root html;
+　　　　　　index index1.html index.htm;
+　　　　}
+　　　　error_page 500 502 503 504 /50x.html;
+　　　　location = /50x.html {
+　　　　root html;
+　　　　　}
+　　}
+
+    access_log  /var/log/nginx/json.access.log  logstash_json;  #定义日志路径为/var/log/nginx/json.access.log,并引用在主配置文件nginx.conf中定义的json日志格式
+复制代码
+json格式的日志内如下：
+
+复制代码
+{"@timestamp":"2016-04-25T13:16:29+08:00","host":"192.168.0.202","clientip":"106.120.73.171","size":0,"responsetime":0.000,"upstreamtime":"-","upstreamhost":"-","http_host":"samsung.chinacloudapp.cn","url":"/index1.html","domain":"samsung.chinacloudapp.cn","xff":"-","referer":"-","agent":"Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/49.0.2623.75 Safari/537.36","status":"304"}
+复制代码
+9：配置允许sendfile方式传输文件：
+
+　　是由后端程序负责把源文件打包加密生成目标文件，然后程序读取目标文件返回给浏览器；这种做法有个致命的缺陷就是占用大量后端程序资源，如果遇到一些访客下载速度巨慢，就会造成大量资源被长期占用得不到释放（如后端程序占用的CPU/内存/进程等），很快后端程序就会因为没有资源可用而无法正常提供服务。通常表现就是 nginx报502错误，而sendfile打开后配合location可以实现有nginx检测文件使用存在，如果存在就有nginx直接提供静态文件的浏览服务，因此可以提升服务器性能.
+
+　　可以配置在http、server或者location模块，配置如下：
+
+    sendfile        on;
+    sendfile_max_chunk 512k;   #Nginxg工作进程每次调用sendfile()传输的数据最大不能超出这个值，默认值为0表示无限制，可以设置在http/server/location模块中。
+10：配置nginx工作进程最大打开文件数：
+
+　　可以设置为linux系统最大打开的文件数量一致，在全局模块配置
+
+worker_rlimit_nofile 65535;
+11：会话保持时间：
+
+　　用户和服务器建立连接后客户端分配keep-alive链接超时时间，服务器将在这个超时时间过后关闭链接，我们将它设置低些可以让ngnix持续工作的时间更长，1.8.1默认为65秒，一般不超过120秒。
+
+ keepalive_timeout  65 60;  #后面的60为发送给客户端应答报文头部中显示的超时时间设置为60s：如不设置客户端将不显示超时时间。
+　　Keep-Alive:timeout=60  #浏览器收到的服务器返回的报文
+
+如果设置为0表示关闭会话保持功能，将如下显示：
+　　Connection:close  #浏览器收到的服务器返回的报文
+12配置网络监听：
+
+　　使用命令listen，可以配置监听IP+端口，端口或监听unix socket:
+
+listen       8090;   #监听本机的IPV4和IPV6的8090端口，等于listen *:8000
+listen       192.168.0.1:8090; #监听指定地址的8090端口
+listen     Unix:/www/file  #监听unix socket
+ 
+
+ 二：server部分主要配置：
+
+1、基于域名和IP的虚拟主机
+
+ server_name  localhost www.a.com; ＃多个域名用空格间隔即可
+ server_name  192.168.0.2;  #IP是本机的网卡IP地址
+2、location 模块正则匹配配置：
+
+　　在没有使用正则表达式的时候，nginx会先在server中的多个location选取匹配度最高的一个uri，uri是用户请求的字符串，即域名后面的web文件路径，然后使用该location模块中的正则url和字符串，如果匹配成功就结束搜索，并使用此location处理此请求。
+
+　　location 正则匹配的语法：
+
+复制代码
+=  #用于标准uri前，需要请求字串与uri完全匹配，如果匹配成功就停止向下匹配并立即处理请求。
+~  #区分大小写
+~*  #不区分大写
+!~  #区分大小写不匹配
+!~* #不区分大小写不匹配 
+^  #匹配以什么开头
+$  #匹配以什么结尾
+\  #转义字符。可以转. * ?等
+*  #代表任意长度的任意字符
+
+-f和!-f #用来判断是否存在文件
+-d和!-d #用来判断是否存在目录
+-e和!-e #用来判断是否存在文件或目录
+-x和!-x #用来判断文件是否可执行
+复制代码
+ 3、常见http状态码：
+
+复制代码
+200 #请求成功，即服务器返回成功
+301 #永久重定向
+302 #临时重定向
+403 #禁止访问，一般是服务器权限拒绝
+400 #错误请求，请求中有语法问题，或不能满足请求。  
+403 #服务器权限问题导致无法显示
+404 #服务器找不到用户请求的页面
+500 #服务器内部错误，大部分是服务器的设置或内部程序出现问题
+501 #没有将正在访问的网站设置为浏览器所请求的内容
+502 #网关问题，是代理服务器请求后端服务器时，后端服务器不可用或没有完成 相应网关服务器，这通常是反向代理服务器下面的节点出问题导致的。
+503 ＃服务当前不可用，可能是服务器超载或停机导致的，或者是反向代理服务器后面没有可以提供服务的节点。
+504 #网关超时，一般是网关代理服务器请求后端服务器时，后端服务器没有在指定的时间内完成处理请求，多数是服务器过载导致没有在特定的时间内返回数据给前端代理服务器。
+505 #该网站不支持浏览器用于请求网页的ＨＴＴＰ协议版本（最为常见的是ＨＴＴＰ/1.1）
+复制代码
+ 4.在server部分使用location配置一个web界面：
+
+要求：在html/localtion/myweb 里面有个index.html文件里面写了myweb，当访问nginx 服务器的/myweb的时候要显示此html文件的内容：
+
+复制代码
+    server {
+        listen       8090;
+        server_name  samsung.chinacloudapp.cn;
+        access_log  /var/log/nginx/samsung1.access.log   logstash_json;
+        location / {
+            root   html;
+            index  index1.html index.htm;
+        }
+        
+    location ~/myweb { #区分大小写，即访问Myweb是不行的
+        root html/localtion;  #定义myweb所在的路径，即在浏览器访问myweb的时候，实际是访问的html/localtion/myweb目录里面的web内容
+        index   index.html; #默认首页文件类型
+    }
+        error_page   500 502 503 504  /50x.html;
+        location = /50x.html {
+            root   html;
+        }
+复制代码
+验证如下：
+
+
+
+ 
+
+三：sysctl.conf针对IPv4内核的7个参数的配置优化：
+
+1、net.core.netdev_max_backlog  #每个网络接口的处理速率比内核处理包的速度快的时候，允许发送队列的最大数目。
+
+[root@Server1 nginx]# sysctl -a | grep max_backlog
+net.core.netdev_max_backlog = 1000  这里默认是1000，可以设置的大一些，比如：
+net.core.netdev_max_backlog = 102400
+2、net.core.somaxconn: #用于调节系统同时发起的TCP连接数，默认值一般为128，在客户端存在高并发请求的时候，128就变得比较小了，可能会导致链接超时或者重传问题。
+
+net.core.somaxconn = 128  #默认为128，高并发的情况时候要设置大一些，比如：
+net.core.somaxconn = 102400
+3、net.ipv4.tcp_max_orphans:设置系统中做多允许多少TCP套接字不被关联到任何一个用户文件句柄上，如果超出这个值，没有与用户文件句柄关联的TCP套接字将立即被复位，同时给出警告信息，这个值是简单防止DDOS（Denial of service）的攻击，在内存比较充足的时候可以设置大一些：
+
+net.ipv4.tcp_max_orphans = 32768 #默认为32768，可以改该打一些：
+net.ipv4.tcp_max_orphans = 102400
+4、net.ipv4.tcp_max_syn_backlog #用于记录尚未收到客户度确认消息的连接请求的最大值，一般要设置大一些：
+
+net.ipv4.tcp_max_syn_backlog = 256  #默认为256，设置大一些如下：
+net.ipv4.tcp_max_syn_backlog =  102400
+5、net.ipv4.tcp_timestamps #用于设置时间戳，可以避免序列号的卷绕，有时候会出现数据包用之前的序列号的情况，此值默认为1表示不允许序列号的数据包，对于Nginx服务器来说，要改为0禁用对于TCP时间戳的支持，这样TCP协议会让内核接受这种数据包，从而避免网络异常，如下：
+
+net.ipv4.tcp_timestamps = 1 #默认为1，改为0，如下：
+net.ipv4.tcp_timestamps = 0
+6、net.ipv4.tcp_synack_retries #用于设置内核放弃TCP连接之前向客户端发生SYN+ACK包的数量，网络连接建立需要三次握手，客户端首先向服务器发生一个连接请求，服务器收到后由内核回复一个SYN+ACK的报文，这个值不能设置过多，会影响服务器的性能，还会引起syn攻击：
+
+net.ipv4.tcp_synack_retries = 5 #默认为5，可以改为1避免syn攻击
+net.ipv4.tcp_synack_retries = 1
+7、net.ipv4.tcp_syn_retries  #与上一个功能类似，设置为1即可：
+
+net.ipv4.tcp_syn_retries = 5 #默认为5，可以改为1
+net.ipv4.tcp_syn_retries = 1
+ 
+
+四：配置文件中针对CPU的2个优化参数：
+
+1、woker_precess #设置Nginx 启动多少个工作进程的数量
+2、woker_cpu_affinit #固定Nginx 工作进程所运行的CPU核心
+ 
+
+五：配置文件中与网络相关的4个指令：
+
+复制代码
+1、keepalived_timeout 60 50； #设置Nginx服务器与客户端保持连接的时间是60秒，到60秒后服务器与客户端断开连接，50s是使用Keep-Alive消息头与部分浏览器如 chrome等的连接事件，到50秒后浏览器主动与服务器断开连接。
+　　keepalived_timeout 60 50;
+2、sendtime_out  10s #Http核心模块指令，指定了发送给客户端应答后的超时时间，Timeout是指没有进入完整established状态，只完成了两次握手，如果超过这个时间客户端没有任何响应，nginx将关闭与客户端的连接。
+　　sendtime_out 10s;
+3、client_header_timeout  #用于指定来自客户端请求头的headerbuffer大小，对于大多数请求，1kb的缓冲区大小已经足够，如果自定义了消息头部或有更大的cookie，可以增加缓冲区大小。
+　　client_header_timeout 4k;
+4、multi_accept  #设置是否允许，Nginx在已经得到一个新连接的通知时，接收尽可能更多的连接。
+    multi_accept on;
+复制代码
+ 
+
+六：配置文件中与驱动模型相关的8个指令： 
+
+1、use； #用于指定Nginx 使用的事件驱动模型
+
+2、woker_process； #指定Nginx启动的工作进程的数量
+
+3、woker_connections  65535； #指定Nginx 每个工作进程的最大连接数，woker_connections  *  woker_process即为Nginx的最大连接数量。
+
+4、woker_rlimit_sigpending 65535  #Nginx每个进程的事件信号队列的上限长度，如果超出长度，Nginx则使用poll模型处理客户的请求。
+
+5、devpoll_changes 和 devpoll_events #用于设置Nginx 在/dev/poll 模型下Nginx服务器可以与内核之间传递事件的数量，前一个设置传递给内核的事件数量，后一个设置从内核读取的事件数量，默认为512。
+
+6、kqueue_changes 和 kqueue_events #设置在kqueue模型下Nginx服务器可以与内核之间传递事件的数量，前一个设置传递给内核的事件数量，后一个设置从内核读取的事件数量，默认为512。
+
+7、epoll_events #设置在epoll驱动模式下Nginx 服务器可以与内核之间传递事件的数量，默认为512。
+
+8、rtsig_signo  #设置Nginx在rtsig 模式使用的两个信号中的第一个，第二个信号是在第一个信号的编号上加1.
+
+9、rtsig_overflow #这些参数指定如何处理rtsig队列溢出。当溢出发生在nginx清空rtsig队列时，它们将连续调用poll()和 rtsig.poll()来处理未完成的事件，直到rtsig被排空以防止新的溢出，当溢出处理完毕，nginx再次启用rtsig模式，rtsig_overflow_events specifies指定经过poll()的事件数，默认为16，rtsig_overflow_test指定poll()处理多少事件后nginx将排空rtsig队列，默认值为32，rtsig_overflow_threshold只能运行在Linux 2.4.x内核下，在排空rtsig队列前nginx检查内核以确定队列是怎样被填满的。默认值为1/10，“rtsig_overflow_threshold 3”意为1/3。
+
+
+
+
+
+
+
+
+
+
