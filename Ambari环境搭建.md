@@ -151,7 +151,14 @@ vi postgresql.conf
 
 # 修改 pg_hba.conf
 vi pg_hba.conf
-# Host   all   all   0.0.0.0/0   md5
+
+# Database administrative login by Unix domain socket
+local   all             postgres                                md5
+# TYPE  DATABASE        USER            ADDRESS                 METHOD
+# "local" is for Unix domain socket connections only
+local   all             all                                     md5
+# IPv4 local connections:
+host   all   all   0.0.0.0/0   md5
 
 ```
 
